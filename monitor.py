@@ -6,9 +6,10 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List
 from enum import Enum
+from mail import Emailer
 
 
-class SupportedCourts(str, Enum):
+class SupportedFacilities(str, Enum):
     Elisabeth = "Elisabeth"
     PoterneDesPeupliers = "Poterne des Peupliers"
 
@@ -17,70 +18,112 @@ class SupportedCourts(str, Enum):
 class TimeSlot:
     start: int
     end: int
-    court: str
+    facility: str
+    court: int
     date: datetime
 
     def __str__(self) -> str:
-        return (
-            f"{self.date.strftime('%Y-%m-%d')} {self.start}h-{self.end}h {self.court}"
-        )
+        date = self.date.strftime("%d/%m/%Y")
+        return f"{date} {self.start}h-{self.end}h {self.facility} Court {self.court}"
 
 
 def parse_date(date_string: str) -> datetime:
     return datetime.strptime(date_string, "%Y-%m-%d")
 
 
-def get_available_timeslots(date: datetime, court: str) -> List[TimeSlot]:
+def get_available_timeslots(date: datetime, facility: str) -> List[TimeSlot]:
     url = "https://tennis.paris.fr/tennis/jsp/site/Portal.jsp?page=recherche&action=ajax_load_planning"
 
-    court_formatted = "+".join(court.split())
+    facility_formatted = "+".join(facility.split())
 
-    payload = f"date_selected={date.day:02}%2F{date.month:02}%2F{date.year}&name_tennis={court_formatted}"
+    payload = f"date_selected={date.day:02}%2F{date.month:02}%2F{date.year}&name_tennis={facility_formatted}"
     headers = {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     }
 
     response = requests.request("POST", url, headers=headers, data=payload)
 
+    timeslots = []
     if response.status_code == 200:
         parsed_html = BeautifulSoup(response.text, features="html.parser")
 
-        free_timeslots = parsed_html.tbody.find_all("span", text="LIBRE")
-        timeslots = []
-        for free_timeslot in free_timeslots:
-            timeslot_text = free_timeslot.parent.parent.find("td").text
-            t = timeslot_text.split()
+        rows = parsed_html.find_all("table")[0].find_all("tr")
+
+        for row in rows[2:]:
+            cells = row.find_all("td")
+            t = cells[0].text.split()
             t1, t2 = int(t[0][:2]), int(t[2][:2])
-            timeslot = TimeSlot(t1, t2, court, date)
-            timeslots.append(timeslot)
 
-        return timeslots
+            for court, cell in enumerate(cells):
+                if cell.find_all("span", text="LIBRE"):
+                    timeslots.append(
+                        TimeSlot(
+                            start=t1, end=t2, facility=facility, court=court, date=date,
+                        )
+                    )
 
-    return []
+    return timeslots
 
 
-def scan_next_week(minimum_start_time: int) -> List[TimeSlot]:
+def scan_next_week(
+    minimum_start_time_weekday: int, minimum_start_time_weekend
+) -> List[TimeSlot]:
     result = []
     today = datetime.today()
     for i in range(1, 7):
         date = today + timedelta(days=i)
-        for court in SupportedCourts:
-            timeslots = get_available_timeslots(date, court)
+
+        if date.weekday() in [5, 6]:
+            minimum_start_time = minimum_start_time_weekend
+        else:
+            minimum_start_time = minimum_start_time_weekday
+
+        for facility in SupportedFacilities:
+            timeslots = get_available_timeslots(date, facility)
             for timeslot in timeslots:
                 if timeslot.start >= minimum_start_time:
                     result.append(timeslot)
     return result
 
 
+def format_timeslots(timeslots: List[TimeSlot]) -> str:
+    body = "Available timeslots:\n\n"
+    for timeslot in timeslots:
+        body += f"{timeslot}\n"
+    body += "\nLink to reserve: https://tennis.paris.fr/tennis/jsp/site/Portal.jsp?page=recherche&action=rechercher_creneau"
+    return body
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--minimum-start-time", type=int, help="Minimum starting hour", required=True
+        "--minimum-start-time-weekday",
+        type=int,
+        help="Minimum starting hour for weekdays",
+        default=0,
+    )
+    parser.add_argument(
+        "--minimum-start-time-weekend",
+        type=int,
+        help="Minimum starting hour for weekends",
+        default=0,
+    )
+    parser.add_argument(
+        "--mail-config",
+        type=str,
+        help="Path to mail configuration file",
+        default="mail_config.yml",
     )
     args = parser.parse_args()
 
-    for x in scan_next_week(args.minimum_start_time):
-        print(x)
+    timesolts = scan_next_week(
+        args.minimum_start_time_weekday, args.minimum_start_time_weekend
+    )
+
+    emailer = Emailer(args.mail_config)
+    emailer.send_email(
+        "Hurray! Tennis courts are available!", format_timeslots(timesolts)
+    )
 
 
 if __name__ == "__main__":
