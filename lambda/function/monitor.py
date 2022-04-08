@@ -100,13 +100,13 @@ def main():
         "--minimum-start-time-weekday",
         type=int,
         help="Minimum starting hour for weekdays",
-        default=0,
+        default=20,
     )
     parser.add_argument(
         "--minimum-start-time-weekend",
         type=int,
         help="Minimum starting hour for weekends",
-        default=0,
+        default=12,
     )
     parser.add_argument(
         "--mail-config",
