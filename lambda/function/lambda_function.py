@@ -6,11 +6,12 @@ import contextlib
 import zipfile
 import io
 
-from aws_xray_sdk.core import xray_recorder
 from aws_xray_sdk.core import patch_all
+from botocore.exceptions import ClientError
 
 from monitor import scan_next_week, format_timeslots
 from mail import Emailer
+
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -37,6 +38,7 @@ def lambda_handler(event, context):
         with open("last_email.txt") as f:
             last_email = f.read().strip()
     except FileNotFoundError:
+        logging.info("## NO last_email.txt FOUND, ASSUMING FIRST RUN")
         last_email = ""
 
     timesolts = scan_next_week(20, 12)
@@ -47,10 +49,13 @@ def lambda_handler(event, context):
     emailer = Emailer("mail_config.yml")
 
     if contains_new_court(last_email, email):
-        emailer.send_email(
-            "Hurray! Tennis courts are available!", email,
-        )
-        logger.info("## EMAIL SENT")
+        try:
+            emailer.send_email(
+                "Hurray! Tennis courts are available!", email,
+            )
+            logger.info("## EMAIL SENT")
+        except ClientError as e:
+            logger.error("## EMAIL FAILED\r" + str(e))
     else:
         logger.info("## NO EMAIL SENT")
 
