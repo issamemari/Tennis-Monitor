@@ -2,11 +2,9 @@ import os
 import logging
 import jsonpickle
 import boto3
-import contextlib
 import zipfile
 import io
 
-from aws_xray_sdk.core import patch_all
 from botocore.exceptions import ClientError
 
 from monitor import scan_next_week, format_timeslots
@@ -15,7 +13,6 @@ from mail import Emailer
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-patch_all()
 
 client = boto3.client("lambda")
 client.get_account_settings()
@@ -48,16 +45,16 @@ def lambda_handler(event, context):
 
     emailer = Emailer("mail_config.yml")
 
-    if contains_new_court(last_email, email):
-        try:
-            emailer.send_email(
-                "Hurray! Tennis courts are available!", email,
-            )
-            logger.info("## EMAIL SENT")
-        except ClientError as e:
-            logger.error("## EMAIL FAILED\r" + str(e))
-    else:
-        logger.info("## NO EMAIL SENT")
+    if not contains_new_court(last_email, email):
+        logger.info("## NO EMAIL SENT, NO NEW COURTS")
+        return
+
+    try:
+        emailer.send_email("Hurray! Tennis courts are available!", email)
+        logger.info("## EMAIL SENT")
+    except ClientError as e:
+        logger.exception("## EMAIL SEND FAILED")
+        return
 
     bio = io.BytesIO()
     with zipfile.ZipFile(bio, "w") as zipf:
@@ -75,5 +72,11 @@ def lambda_handler(event, context):
     )
     logger.info("## FUNCTION UPDATED")
 
-    response = client.get_account_settings()
-    return response["AccountUsage"]
+
+def main() -> int:
+    lambda_handler(None, None)
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
